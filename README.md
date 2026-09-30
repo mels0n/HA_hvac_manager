@@ -1,8 +1,10 @@
 # Home Assistant HVAC Manager
 
+![Today's Plan](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcr_lights.melson.us%2Fcr_light_stats.php&query=%24%5B%27sensor.public_hvac_plan%27%5D&label=Today%27s%20Plan&color=blue)
+![Humidity Trim](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcr_lights.melson.us%2Fcr_light_stats.php&query=%24%5B%27sensor.public_hvac_humidity_trim%27%5D&label=Humidity%20Trim&color=teal)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-*Two read-only display sensors, `sensor.public_hvac_plan` and `sensor.public_hvac_humidity_trim`, can feed public badges. See "Publish live values" below.*
+*The badges show what the system is doing in my house right now: today's plan, and how far the cooling setpoint is trimmed for indoor humidity.*
 
 ## What this is
 
