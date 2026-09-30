@@ -21,10 +21,19 @@ sequence:
       # Not every weather integration reports a daily low.
       today_low: "{{ d[0].get('templow') }}"
       mean_high_3d: "{{ d[:3] | map(attribute='temperature') | list | average }}"
-      min_low_3d: "{{ d[:3] | map(attribute='templow') | list | min }}"
+      # Entries without a templow are skipped. If none of the three days has
+      # one, min_low_3d is none and the Summer test below is false.
+      min_low_3d: >-
+        {%- set ns = namespace(l=[]) -%}
+        {%- for e in d[:3] -%}
+          {%- if e.get('templow') is not none -%}
+            {%- set ns.l = ns.l + [e.get('templow') | float(0)] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ (ns.l | min) if ns.l | count > 0 else none }}
   # Season comes from the next three days, so one odd day does not flip it.
   - choose:
-      - conditions: "{{ mean_high_3d | float >= 78 and min_low_3d | float >= 62 }}"
+      - conditions: "{{ mean_high_3d | float >= 78 and min_low_3d | float(0) >= 62 }}"
         sequence:
           - action: input_select.select_option
             target:

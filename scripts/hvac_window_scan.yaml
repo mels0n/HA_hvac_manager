@@ -10,7 +10,9 @@ description: >-
   that ends before 21:30, with its real start and end. scan_type "overnight"
   requires every hour from now until 07:30 tomorrow to be comfortable.
   Returns eligible, usable_hours, window_start, window_end, close_by,
-  starts_now, min_hours and scan_type.
+  starts_now, min_hours and scan_type. The precipitation probability test (under
+  25) applies only when the forecast provides that field; the precipitation
+  amount must always be 0.
 icon: mdi:weather-windy
 mode: queued
 max: 2
@@ -55,7 +57,8 @@ sequence:
           {%- set t = h.temperature | float(-99) -%}
           {%- set rh = h.get('humidity', 50) | float(50) -%}
           {%- set dp = (((((t - 32) * 5 / 9) - (100 - rh) / 5) * 9) / 5) + 32 -%}
-          {%- set precip_ok = (h.get('precipitation_probability', 0) | float(0)) < 25 and (h.get('precipitation', 0) | float(0)) == 0 -%}
+          {%- set pp = h.get('precipitation_probability') -%}
+          {%- set precip_ok = (pp is none or (pp | float(0)) < 25) and (h.get('precipitation', 0) | float(0)) == 0 -%}
           {%- set wind_ok = (h.get('wind_speed', 0) | float(0)) < 20 -%}
           {%- set dryness_bonus = ([([dp_in - dp, 0] | max), 3] | min) if indoor_ok else 0 -%}
           {%- set muggy_penalty = ([dp - 60, 0] | max) * 1.5 -%}

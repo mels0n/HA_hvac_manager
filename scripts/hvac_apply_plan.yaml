@@ -4,9 +4,22 @@ description: >-
   the thermostat, or turns the thermostat off while input_boolean.hvac_windows_open
   is on. Guards: manual hold and stale thermostat data. It only sends a command
   when the current state differs, because cloud thermostat APIs are rate limited.
+  The optional field force_day (true or false) overrides the day/night choice,
+  which is otherwise read from binary_sensor.hvac_awake_hours.
 icon: mdi:thermostat-auto
 mode: queued
 max: 3
+fields:
+  force_day:
+    name: Force day or night
+    description: >-
+      Optional. true uses the day setpoints, false the night setpoints. The
+      07:30 and 21:30 triggers pass it so the result does not depend on
+      binary_sensor.hvac_awake_hours having flipped yet. Omit it to read the
+      sensor.
+    required: false
+    selector:
+      boolean:
 sequence:
   - alias: "Guard: no manual hold"
     condition: state
@@ -21,9 +34,12 @@ sequence:
   #            is skipped in Winter so it cannot pull the high end of a Mixed
   #            band down onto the heat setpoint.
   #   heat_t = heat setpoint (day or night).
+  #   is_day = force_day when a caller passes a boolean, else the awake-hours
+  #            sensor. The 07:30 and 21:30 triggers fire at the same instant
+  #            the sensor flips, so they pass force_day instead of racing it.
   # The 74 and 68 fallbacks only apply if a helper is unavailable.
   - variables:
-      is_day: "{{ is_state('binary_sensor.hvac_awake_hours', 'on') }}"
+      is_day: "{{ force_day if (force_day is defined and force_day is boolean) else is_state('binary_sensor.hvac_awake_hours', 'on') }}"
       cool_t: >-
         {{ ((states('input_number.hvac_cool_day') if is_day else states('input_number.hvac_cool_night')) | float(74)
             - (states('input_number.hvac_humidity_offset') | float(0) if not is_state('input_select.hvac_season', 'Winter') else 0)) | round(0) }}

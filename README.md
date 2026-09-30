@@ -13,7 +13,7 @@ This is a cleaned-up, generic version of the setup running in my home, not a cop
 **How it works**
 
 - **Daily plan.** At 05:00 `script.hvac_compute_plan` reads the daily forecast. The season (Summer, Winter, Shoulder) comes from the next three days. Today's plan comes from today alone: a big swing (afternoon 76 or above, morning 52 or below) is Mixed, 78 or above is Cool, 60 or below is Heat, anything else is Mixed. `script.hvac_apply_plan` then puts the thermostat in the matching mode. It only sends a command when the thermostat differs from the plan, because cloud thermostat APIs are rate limited.
-- **Setpoints.** Separate day and night values for cooling and heating, switched at 07:30 and 21:30. A change made at the wall or in the vendor's app turns on a manual hold, so the manager stops overriding it until the next schedule boundary.
+- **Setpoints.** Separate day and night values for cooling and heating, switched at 07:30 and 21:30. A change made at the wall or in the vendor's app turns on a manual hold, so the manager stops overriding it until the next schedule boundary. The 07:30 and 21:30 triggers tell the apply script which setpoints to use (`force_day`) rather than waiting on the awake-hours sensor, which flips at the same instant.
 - **Humidity-compensated cooling.** 74F at 61% humidity feels warmer than 74F at 45%. The cooling setpoint is lowered by 1F for every 8% of indoor humidity above 45%, capped at 5F, with hysteresis so the trim does not flap around a band edge.
 - **Daily digest.** At 07:35 a message with the plan, outdoor and indoor conditions, the setpoint, and the open-window outlook.
 - **Window advisor.** It scans the next 20 hours of forecast for a run of at least N comfortable hours (default 4). If one has started it prompts you with an "Opened them" button. If one starts later it reminds you 15 minutes before. Once the windows are marked open the thermostat is turned off, and you get a close reminder 15 minutes before the stretch ends, plus alerts for rain, heat or cold. Tap "Closed them" or type `/closed` and the plan is restored. Typed `/opened` and `/closed` work like the buttons.
@@ -54,7 +54,7 @@ The files use these generic ids. Find and replace each one with yours across `pa
 | Generic id | What it is | Notes |
 |---|---|---|
 | `climate.thermostat` | Your thermostat | Must support `heat`, `cool`, `heat_cool` and `off`, with `temperature`, `target_temp_high` and `target_temp_low`, and report `hvac_action` |
-| `weather.home` | A weather entity | Needs daily forecasts with `temperature` and `templow`, and hourly forecasts with `temperature`, and ideally `humidity`, `wind_speed` and `precipitation` |
+| `weather.home` | A weather entity | Needs daily forecasts with `temperature` (`templow` is used when present; days without it are skipped), and hourly forecasts with `temperature`, and ideally `humidity`, `wind_speed` and `precipitation` (`precipitation_probability` is used only if the feed provides it) |
 | `sensor.thermostat_temperature` | Indoor temperature in F | Whole-house average or the thermostat's own reading |
 | `sensor.thermostat_humidity` | Indoor relative humidity in % | The humidity bands assume whole-percent readings |
 | Telegram | The built-in `telegram_bot` integration | Not `notify.*`. Buttons, edits and typed commands need the bot integration itself |
