@@ -1,0 +1,22 @@
+alias: "HVAC: arm the window close reminder"
+description: >-
+  Sets input_datetime.hvac_window_close_by from a fresh scan: the end of the
+  comfortable stretch minus 15 minutes, or three hours from now when no
+  eligible window exists. Called whenever windows are marked open (button,
+  typed command, manual toggle, or the restart reconciler), so the close
+  reminder can never be left un-armed. This is the single home of that logic.
+icon: mdi:timer-outline
+mode: queued
+max: 2
+sequence:
+  - action: script.hvac_window_scan
+    data:
+      # After 20:00 the useful question is whether the weather holds overnight.
+      scan_type: "{{ 'overnight' if now().hour >= 20 else 'day' }}"
+    response_variable: ws
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.hvac_window_close_by
+    data:
+      datetime: >-
+        {{ ((as_datetime(ws.close_by) - timedelta(minutes=15)) if ws.eligible else (now() + timedelta(hours=3))).strftime('%Y-%m-%d %H:%M:%S') }}

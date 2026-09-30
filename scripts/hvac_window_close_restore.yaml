@@ -1,0 +1,12 @@
+alias: "HVAC: windows closed, restore plan"
+description: >-
+  Marks the windows closed and re-applies the current plan. The daily plan is
+  never overwritten by window mode (ADR-0002), so there is nothing to restore:
+  clear the flag, then let script.hvac_apply_plan read the intact plan.
+icon: mdi:window-closed-variant
+mode: single
+sequence:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.hvac_windows_open
+  - action: script.hvac_apply_plan

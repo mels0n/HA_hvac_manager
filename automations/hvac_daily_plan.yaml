@@ -1,0 +1,24 @@
+alias: HVAC Daily Plan
+description: >-
+  05:00 every day: clears the manual hold, classifies the season and today's
+  plan (Cool, Heat or Mixed) from the forecast, applies it, and warns about a
+  hard freeze. The thresholds live in script.hvac_compute_plan.
+triggers:
+  - trigger: time
+    at: "05:00:00"
+actions:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.hvac_manual_hold
+    note: A new day starts from the schedule, not from yesterday's manual change.
+  - action: script.hvac_compute_plan
+    response_variable: plan
+  - action: script.hvac_apply_plan
+  - if:
+      - condition: template
+        value_template: "{{ plan.today_low is not none and plan.today_low | float <= 10 }}"
+    then:
+      - action: script.hvac_message_send
+        data:
+          message: "Hard freeze forecast (low {{ plan.today_low }}°F). Heat floor active. Keep an eye on exposed pipes."
+mode: single

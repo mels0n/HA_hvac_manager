@@ -1,0 +1,137 @@
+alias: "HVAC: apply plan"
+description: >-
+  Idempotently applies input_select.hvac_daily_plan (Cool, Heat or Mixed) to
+  the thermostat, or turns the thermostat off while input_boolean.hvac_windows_open
+  is on. Guards: manual hold and stale thermostat data. It only sends a command
+  when the current state differs, because cloud thermostat APIs are rate limited.
+icon: mdi:thermostat-auto
+mode: queued
+max: 3
+sequence:
+  - alias: "Guard: no manual hold"
+    condition: state
+    entity_id: input_boolean.hvac_manual_hold
+    state: "off"
+  - alias: "Guard: thermostat data is fresh"
+    condition: state
+    entity_id: binary_sensor.thermostat_data_stale
+    state: "off"
+  # Setpoints are computed once, up front.
+  #   cool_t = cool setpoint (day or night) minus the humidity trim. The trim
+  #            is skipped in Winter so it cannot pull the high end of a Mixed
+  #            band down onto the heat setpoint.
+  #   heat_t = heat setpoint (day or night).
+  # The 74 and 68 fallbacks only apply if a helper is unavailable.
+  - variables:
+      is_day: "{{ is_state('binary_sensor.hvac_awake_hours', 'on') }}"
+      cool_t: >-
+        {{ ((states('input_number.hvac_cool_day') if is_day else states('input_number.hvac_cool_night')) | float(74)
+            - (states('input_number.hvac_humidity_offset') | float(0) if not is_state('input_select.hvac_season', 'Winter') else 0)) | round(0) }}
+      heat_t: >-
+        {{ (states('input_number.hvac_heat_day') if is_day else states('input_number.hvac_heat_night')) | float(68) | round(0) }}
+  - choose:
+      - alias: "Windows open: HVAC off"
+        conditions:
+          - condition: state
+            entity_id: input_boolean.hvac_windows_open
+            state: "on"
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: climate.thermostat
+                    state: "off"
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  hvac_mode: "off"
+      - alias: "Plan: Cool"
+        conditions:
+          - condition: state
+            entity_id: input_select.hvac_daily_plan
+            state: Cool
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: climate.thermostat
+                    state: cool
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  hvac_mode: cool
+              # Give the cloud API a moment to accept the mode before the setpoint.
+              - delay:
+                  seconds: 3
+          # A template is unavoidable here: comparing an attribute to a computed value.
+          - if:
+              - "{{ state_attr('climate.thermostat', 'temperature') != cool_t }}"
+            then:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  temperature: "{{ cool_t }}"
+      - alias: "Plan: Heat"
+        conditions:
+          - condition: state
+            entity_id: input_select.hvac_daily_plan
+            state: Heat
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: climate.thermostat
+                    state: heat
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  hvac_mode: heat
+              - delay:
+                  seconds: 3
+          - if:
+              - "{{ state_attr('climate.thermostat', 'temperature') != heat_t }}"
+            then:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  temperature: "{{ heat_t }}"
+      - alias: "Plan: Mixed (heat_cool)"
+        conditions:
+          - condition: state
+            entity_id: input_select.hvac_daily_plan
+            state: Mixed
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: climate.thermostat
+                    state: heat_cool
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  hvac_mode: heat_cool
+              - delay:
+                  seconds: 3
+          - if:
+              - "{{ state_attr('climate.thermostat', 'target_temp_high') != cool_t or state_attr('climate.thermostat', 'target_temp_low') != heat_t }}"
+            then:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat
+                data:
+                  target_temp_high: "{{ cool_t }}"
+                  target_temp_low: "{{ heat_t }}"

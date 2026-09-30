@@ -1,0 +1,97 @@
+alias: HVAC Thermostat Watchdog
+description: >-
+  Cloud thermostat feeds sometimes freeze: the entity stays "available" but
+  stops updating. Every 30 minutes, if binary_sensor.thermostat_data_stale is
+  on, this reloads the thermostat integration (at most once every 6 hours) and
+  says nothing. It only sends an alert when the feed is still stale two minutes
+  after a reload AND the freeze episode is more than 24 hours old, which then
+  repeats roughly every 6 hours until fixed. When the feed recovers, the plan
+  is re-applied, because script.hvac_apply_plan refuses to run while data is
+  stale and would otherwise have dropped a change requested in the meantime.
+triggers:
+  - trigger: time_pattern
+    minutes: "/30"
+    id: watchdog
+  - trigger: state
+    entity_id: binary_sensor.thermostat_data_stale
+    from: "on"
+    to: "off"
+    for: "00:01:00"
+    id: recovered
+actions:
+  - choose:
+      - alias: "Stale feed: reload it, alert only after 24 hours"
+        conditions:
+          - condition: trigger
+            id: watchdog
+          - condition: state
+            entity_id: binary_sensor.thermostat_data_stale
+            state: "on"
+          - condition: template
+            value_template: >-
+              {{ (now() - states('input_datetime.thermostat_last_reload_attempt') | as_datetime(now() - timedelta(days=365)) | as_local).total_seconds() > 21600 }}
+            note: Throttle. Do not reload more often than every 6 hours.
+        sequence:
+          - variables:
+              prev_attempt_gap_h: >-
+                {{ (now() - states('input_datetime.thermostat_last_reload_attempt') | as_datetime(now() - timedelta(days=365)) | as_local).total_seconds() / 3600 }}
+              stale_since: >-
+                {{ (states.sensor.thermostat_temperature.last_reported | as_local).strftime('%Y-%m-%d %H:%M:%S') if states.sensor.thermostat_temperature is not none else now().strftime('%Y-%m-%d %H:%M:%S') }}
+          # Episode tracking. A reload rewrites the entity state and refreshes
+          # last_reported even when the feed is still dead, so the stale sensor
+          # flaps off after every reload and a "stale for 24 hours" duration
+          # check can never be satisfied. Instead, stamp when an episode began.
+          # Attempts recur about every 6.5 hours during a persistent outage, so
+          # a gap of more than 12 hours since the previous attempt means the
+          # feed recovered in between and this is a NEW episode.
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ prev_attempt_gap_h | float > 12
+                     or (now() - states('input_datetime.thermostat_stale_first_seen') | as_datetime(now()) | as_local).total_seconds() > 2592000 }}
+                note: >-
+                  The second clause guards against a stuck or ancient stamp
+                  (over 30 days), which would make a brand new episode look
+                  24 hours old and alert immediately.
+            then:
+              - action: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.thermostat_stale_first_seen
+                data:
+                  datetime: "{{ stale_since }}"
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.thermostat_last_reload_attempt
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          # Targeting the entity lets Home Assistant find the config entry, so
+          # no entry id is hard-coded and re-adding the integration is safe.
+          - action: homeassistant.reload_config_entry
+            target:
+              entity_id: climate.thermostat
+          - delay:
+              seconds: 120
+          - if:
+              - condition: state
+                entity_id: binary_sensor.thermostat_data_stale
+                state: "on"
+              - condition: template
+                value_template: >-
+                  {{ (now() - states('input_datetime.thermostat_stale_first_seen') | as_datetime(now()) | as_local).total_seconds() > 86400 }}
+            then:
+              - action: script.hvac_message_send
+                data:
+                  message: >-
+                    Thermostat feed has been stale for 24h+ and automatic reloads are not fixing it (first stale {{ (states('input_datetime.thermostat_stale_first_seen') | as_datetime(now()) | as_local).strftime('%b %-d %-I:%M %p') }}). It likely needs re-authentication in the integration's settings.
+      - alias: "Feed recovered: re-apply the plan"
+        conditions:
+          - condition: trigger
+            id: recovered
+        sequence:
+          - action: script.hvac_apply_plan
+        note: >-
+          Because a reload refreshes last_reported, this can also fire on a feed
+          that is still dead. That is harmless: apply_plan only sends commands
+          when the thermostat differs from the plan.
+mode: queued
+max: 3

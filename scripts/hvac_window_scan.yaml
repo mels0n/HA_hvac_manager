@@ -1,0 +1,105 @@
+alias: "HVAC: window scan"
+description: >-
+  Scans the hourly forecast for a stretch of weather comfortable enough to open
+  the windows. An hour is comfortable when the outdoor temperature is at least
+  62F and no higher than a ceiling (76F, raised by up to 3F when the outdoor
+  dew point is below the indoor one, lowered by 1.5F for every degree of
+  outdoor dew point above 60F), the dew point is under 67F, there is no
+  precipitation, and the wind is under 20 mph. scan_type "day" returns the
+  first run of at least input_number.hvac_window_min_hours comfortable hours
+  that ends before 21:30, with its real start and end. scan_type "overnight"
+  requires every hour from now until 07:30 tomorrow to be comfortable.
+  Returns eligible, usable_hours, window_start, window_end, close_by,
+  starts_now, min_hours and scan_type.
+icon: mdi:weather-windy
+mode: queued
+max: 2
+fields:
+  scan_type:
+    description: "day or overnight"
+    required: true
+    default: day
+    selector:
+      select:
+        options:
+          - day
+          - overnight
+sequence:
+  - action: weather.get_forecasts
+    target:
+      entity_id: weather.home
+    data:
+      type: hourly
+    response_variable: fc
+  # One template does the whole scan. It walks the next 20 hourly buckets,
+  # building runs of consecutive comfortable hours (ns.runs) for the daytime
+  # scan and counting the unbroken comfortable prefix (ns.oc) for the
+  # overnight scan. Hourly feeds differ in which fields they carry, so every
+  # optional field is read with .get() and a neutral default.
+  - variables:
+      result: >-
+        {%- set hours = fc['weather.home']['forecast'] -%}
+        {%- set min_h = states('input_number.hvac_window_min_hours') | int(4) -%}
+        {%- set today_2130 = now().replace(hour=21, minute=30, second=0, microsecond=0) -%}
+        {%- set tomorrow_730 = (now() + timedelta(days=1)).replace(hour=7, minute=30, second=0, microsecond=0) -%}
+        {%- set need_overnight = (((tomorrow_730 - now()).total_seconds() / 3600) | round(0, 'ceil') | int) -%}
+        {%- set ns = namespace(runs=[], cs=none, ce=none, cl=0, oc=0, ostop=false) -%}
+        {#- Indoor dew point (F) from temperature and humidity, used to decide
+            whether outside air is drier than inside air. -#}
+        {%- set t_in = states('sensor.thermostat_temperature') | float(-99) -%}
+        {%- set rh_in = states('sensor.thermostat_humidity') | float(-99) -%}
+        {%- set indoor_ok = t_in > -90 and rh_in > -90 -%}
+        {%- set dp_in = (((t_in - 32) * 5 / 9 - (100 - rh_in) / 5) * 9 / 5) + 32 -%}
+        {%- set base = 76 if indoor_ok else 74 -%}
+        {%- for h in hours[:20] -%}
+          {%- set t = h.temperature | float(-99) -%}
+          {%- set rh = h.get('humidity', 50) | float(50) -%}
+          {%- set dp = (((((t - 32) * 5 / 9) - (100 - rh) / 5) * 9) / 5) + 32 -%}
+          {%- set precip_ok = (h.get('precipitation_probability', 0) | float(0)) < 25 and (h.get('precipitation', 0) | float(0)) == 0 -%}
+          {%- set wind_ok = (h.get('wind_speed', 0) | float(0)) < 20 -%}
+          {%- set dryness_bonus = ([([dp_in - dp, 0] | max), 3] | min) if indoor_ok else 0 -%}
+          {%- set muggy_penalty = ([dp - 60, 0] | max) * 1.5 -%}
+          {%- set ceiling = base + dryness_bonus - muggy_penalty -%}
+          {%- set comfy = t >= 62 and t <= ceiling and dp < 67 and precip_ok and wind_ok -%}
+          {%- set dt = as_datetime(h.datetime) | as_local -%}
+          {%- if not ns.ostop -%}
+            {%- if comfy -%}{%- set ns.oc = ns.oc + 1 -%}{%- else -%}{%- set ns.ostop = true -%}{%- endif -%}
+          {%- endif -%}
+          {%- if comfy and dt < today_2130 -%}
+            {%- if ns.cs is none -%}{%- set ns.cs = dt -%}{%- set ns.cl = 0 -%}{%- endif -%}
+            {%- set ns.cl = ns.cl + 1 -%}
+            {%- set ns.ce = dt + timedelta(hours=1) -%}
+          {%- elif ns.cs is not none -%}
+            {%- set ns.runs = ns.runs + [{'s': ns.cs, 'e': ns.ce, 'l': ns.cl}] -%}
+            {%- set ns.cs = none -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- if ns.cs is not none -%}
+          {%- set ns.runs = ns.runs + [{'s': ns.cs, 'e': ns.ce, 'l': ns.cl}] -%}
+        {%- endif -%}
+        {%- if scan_type == 'overnight' -%}
+          {%- set eligible = ns.oc >= need_overnight -%}
+          {%- set usable = need_overnight if eligible else 0 -%}
+          {%- set w_start = now() -%}
+          {%- set w_end = tomorrow_730 -%}
+          {%- set starts_now = true -%}
+        {%- else -%}
+          {%- set q = ns.runs | selectattr('l', 'ge', min_h) | list -%}
+          {%- if q | count > 0 -%}
+            {%- set pick = q | first -%}
+            {%- set w_start = [pick.s, now()] | max -%}
+            {%- set w_end = [pick.e, today_2130] | min -%}
+            {%- set usable = ((w_end - w_start).total_seconds() / 3600) | round(0) | int -%}
+            {%- set eligible = usable >= min_h -%}
+            {%- set starts_now = (w_start - now()).total_seconds() < 3600 -%}
+          {%- else -%}
+            {%- set eligible = false -%}
+            {%- set usable = 0 -%}
+            {%- set w_start = now() -%}
+            {%- set w_end = now() -%}
+            {%- set starts_now = false -%}
+          {%- endif -%}
+        {%- endif -%}
+        {{ {'eligible': eligible, 'usable_hours': usable, 'window_start': w_start.isoformat(), 'window_end': w_end.isoformat(), 'close_by': w_end.isoformat(), 'starts_now': starts_now, 'min_hours': min_h, 'scan_type': scan_type} }}
+  - stop: "Scan complete"
+    response_variable: result

@@ -1,0 +1,34 @@
+alias: HVAC Filter Replaced
+description: >-
+  Marks the filter replaced from the reminder's "Replaced" button or the typed
+  command /filterdone. Both run script.hvac_filter_done, which resets the
+  runtime counter and closes out every outstanding reminder.
+triggers:
+  - trigger: event
+    event_type: telegram_callback
+    event_data:
+      data: /hvac_filter_done
+    id: callback
+  # A typed command fires telegram_command, not telegram_callback.
+  - trigger: event
+    event_type: telegram_command
+    event_data:
+      command: /filterdone
+    id: command
+actions:
+  - if:
+      - condition: trigger
+        id: callback
+    then:
+      - action: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Filter logged"
+          show_alert: false
+  - action: script.hvac_filter_done
+    data:
+      # The typed command has no reminder message to edit in place, so it
+      # announces instead.
+      announce: "{{ trigger.id == 'command' }}"
+mode: queued
+max: 3

@@ -1,0 +1,100 @@
+alias: HVAC Window Close Alerts
+description: >-
+  While the windows are marked open, alerts you to close them: when the
+  comfortable stretch is about to end (input_datetime.hvac_window_close_by),
+  when rain arrives, or when the house gets too hot or too cold. The rain alert
+  repeats up to 5 times, 20 minutes apart, because rain can damage property;
+  the others alert once because discomfort does not warrant nagging. It also
+  re-arms the close time when the windows are marked open by some other route
+  (a dashboard toggle) and the stored time is already in the past.
+triggers:
+  - trigger: time
+    at: input_datetime.hvac_window_close_by
+    id: close_time
+  - trigger: state
+    entity_id: weather.home
+    to:
+      - rainy
+      - pouring
+      - lightning-rainy
+      - hail
+    id: rain
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_temperature
+    above: 77
+    for: "00:10:00"
+    id: hot
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_temperature
+    below: 66
+    for: "00:10:00"
+    id: cold
+  - trigger: state
+    entity_id: input_boolean.hvac_windows_open
+    to: "on"
+    id: opened
+actions:
+  - choose:
+      - alias: "Close the windows"
+        conditions:
+          - condition: trigger
+            id:
+              - close_time
+              - rain
+              - hot
+              - cold
+          - condition: state
+            entity_id: input_boolean.hvac_windows_open
+            state: "on"
+        sequence:
+          - variables:
+              reason: >-
+                {% if trigger.id == 'rain' %}rain moving in
+                {%- elif trigger.id == 'hot' %}it is getting hot inside ({{ states('sensor.thermostat_temperature') }}°F)
+                {%- elif trigger.id == 'cold' %}it is getting cold inside
+                {%- else %}the comfortable stretch is ending
+                {%- endif %}
+          - if:
+              - condition: trigger
+                id: rain
+            then:
+              - repeat:
+                  sequence:
+                    - action: script.hvac_message_send
+                      data:
+                        message: "Close the windows: {{ reason }}."
+                        button: "✅ Closed them:/hvac_win_close"
+                        store: input_text.hvac_window_messages
+                    - wait_for_trigger:
+                        - trigger: state
+                          entity_id: input_boolean.hvac_windows_open
+                          to: "off"
+                      timeout: "00:20:00"
+                      continue_on_timeout: true
+                  until:
+                    - condition: or
+                      conditions:
+                        - condition: state
+                          entity_id: input_boolean.hvac_windows_open
+                          state: "off"
+                        - condition: template
+                          value_template: "{{ repeat.index >= 5 }}"
+            else:
+              - action: script.hvac_message_send
+                data:
+                  message: "Close the windows: {{ reason }}."
+                  button: "✅ Closed them:/hvac_win_close"
+                  store: input_text.hvac_window_messages
+      - alias: "Re-arm the close time"
+        conditions:
+          - condition: trigger
+            id: opened
+          - condition: template
+            value_template: "{{ as_timestamp(states('input_datetime.hvac_window_close_by'), 0) < as_timestamp(now()) }}"
+            note: >-
+              A time trigger on an input_datetime whose value is in the past can
+              never fire, so a stale value here would mean no reminder at all.
+        sequence:
+          - action: script.hvac_window_arm_close
+mode: parallel
+max: 6

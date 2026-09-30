@@ -1,0 +1,167 @@
+alias: HVAC Window Responses
+description: >-
+  Handles "Opened them" and "Closed them" from the inline buttons, and the
+  typed commands /opened and /closed. Opening turns the thermostat off, arms
+  the close reminder and marks windows open; closing clears the flag and
+  restores the plan. Every message is edited through the ids recorded by
+  script.hvac_message_send, so all chats show the same state. A tap or command
+  that no longer applies (already open, already closed) answers politely and
+  strips the dead button.
+triggers:
+  - trigger: event
+    event_type: telegram_callback
+    event_data:
+      data: /hvac_win_open
+    id: cb_open
+  - trigger: event
+    event_type: telegram_callback
+    event_data:
+      data: /hvac_win_close
+    id: cb_close
+  # A typed command fires telegram_command, not telegram_callback, so a
+  # button-only handler would ignore it.
+  - trigger: event
+    event_type: telegram_command
+    event_data:
+      command: /opened
+    id: cmd_open
+  - trigger: event
+    event_type: telegram_command
+    event_data:
+      command: /closed
+    id: cmd_close
+actions:
+  - choose:
+      - alias: "Opened (button or /opened)"
+        conditions:
+          - condition: trigger
+            id:
+              - cb_open
+              - cmd_open
+          - condition: state
+            entity_id: input_boolean.hvac_windows_open
+            state: "off"
+        sequence:
+          - if:
+              - condition: trigger
+                id: cb_open
+            then:
+              - action: telegram_bot.answer_callback_query
+                data:
+                  callback_query_id: "{{ trigger.event.data.id }}"
+                  message: "Windows mode on"
+                  show_alert: false
+          # Arm before flipping the flag, so the close time is already in the future.
+          - action: script.hvac_window_arm_close
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.hvac_windows_open
+          # Turn the thermostat off right away rather than waiting on apply_plan's guards.
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: climate.thermostat
+            data:
+              hvac_mode: "off"
+          - variables:
+              opened_text: >-
+                Opened at {{ now().strftime('%-I:%M %p') }}. HVAC paused. Close reminder around {{ state_attr('input_datetime.hvac_window_close_by', 'timestamp') | timestamp_custom('%-I:%M %p') }}.
+          - if:
+              - condition: trigger
+                id: cb_open
+            then:
+              # A tapped message that predates id tracking is not in the store,
+              # so edit it directly as well.
+              - if:
+                  - "{{ (trigger.event.data.chat_id ~ ':' ~ trigger.event.data.message.message_id) not in (states('input_text.hvac_window_messages') | string).split(',') }}"
+                then:
+                  - action: telegram_bot.edit_message
+                    continue_on_error: true
+                    data:
+                      chat_id: "{{ trigger.event.data.chat_id }}"
+                      message_id: "{{ trigger.event.data.message.message_id }}"
+                      message: "{{ opened_text }}"
+                      inline_keyboard:
+                        - "✅ Closed them:/hvac_win_close"
+              - action: script.hvac_message_update
+                data:
+                  message: "{{ opened_text }}"
+                  button: "✅ Closed them:/hvac_win_close"
+                  store: input_text.hvac_window_messages
+            else:
+              - action: script.hvac_message_send
+                data:
+                  message: "{{ opened_text }}"
+                  button: "✅ Closed them:/hvac_win_close"
+                  store: input_text.hvac_window_messages
+      - alias: "Closed (button or /closed)"
+        conditions:
+          - condition: trigger
+            id:
+              - cb_close
+              - cmd_close
+          - condition: state
+            entity_id: input_boolean.hvac_windows_open
+            state: "on"
+        sequence:
+          - if:
+              - condition: trigger
+                id: cb_close
+            then:
+              - action: telegram_bot.answer_callback_query
+                data:
+                  callback_query_id: "{{ trigger.event.data.id }}"
+                  message: "Closing, restoring HVAC"
+                  show_alert: false
+          - action: script.hvac_window_close_restore
+          - variables:
+              closed_text: "Closed at {{ now().strftime('%-I:%M %p') }}. HVAC restored to {{ states('input_select.hvac_daily_plan') }}."
+          - if:
+              - condition: trigger
+                id: cb_close
+            then:
+              - if:
+                  - "{{ (trigger.event.data.chat_id ~ ':' ~ trigger.event.data.message.message_id) not in (states('input_text.hvac_window_messages') | string).split(',') }}"
+                then:
+                  - action: telegram_bot.edit_message
+                    continue_on_error: true
+                    data:
+                      chat_id: "{{ trigger.event.data.chat_id }}"
+                      message_id: "{{ trigger.event.data.message.message_id }}"
+                      message: "{{ closed_text }}"
+                      inline_keyboard: []
+              - action: script.hvac_message_update
+                data:
+                  message: "{{ closed_text }}"
+                  button: ""
+                  store: input_text.hvac_window_messages
+            else:
+              - action: script.hvac_message_send
+                data:
+                  message: "{{ closed_text }}"
+                  store: input_text.hvac_window_messages
+    # Reached only when a tap or command does not match its branch above.
+    default:
+      - if:
+          - condition: trigger
+            id:
+              - cb_open
+              - cb_close
+        then:
+          - action: telegram_bot.answer_callback_query
+            data:
+              callback_query_id: "{{ trigger.event.data.id }}"
+              message: "Already marked {{ 'open' if is_state('input_boolean.hvac_windows_open', 'on') else 'closed' }}"
+              show_alert: false
+          - action: telegram_bot.edit_replymarkup
+            continue_on_error: true
+            data:
+              chat_id: "{{ trigger.event.data.chat_id }}"
+              message_id: "{{ trigger.event.data.message.message_id }}"
+              inline_keyboard: []
+        else:
+          - action: telegram_bot.send_message
+            data:
+              chat_id: "{{ trigger.event.data.chat_id }}"
+              message: "Windows are already marked {{ 'open' if is_state('input_boolean.hvac_windows_open', 'on') else 'closed' }}. Nothing changed."
+mode: queued
+max: 5

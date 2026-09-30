@@ -1,0 +1,81 @@
+alias: "HVAC: compute season and daily plan"
+description: >-
+  Classifies the season and today's plan from the daily forecast and writes
+  input_select.hvac_season and input_select.hvac_daily_plan. It does not apply
+  the plan; callers run script.hvac_apply_plan afterwards. Returns today_high
+  and today_low. Every threshold below is a starting value, not a tuned one.
+  Adjust them to your climate.
+icon: mdi:calendar-sync
+mode: queued
+max: 3
+sequence:
+  - action: weather.get_forecasts
+    target:
+      entity_id: weather.home
+    data:
+      type: daily
+    response_variable: fc
+  - variables:
+      d: "{{ fc['weather.home']['forecast'] }}"
+      today_high: "{{ d[0].temperature }}"
+      # Not every weather integration reports a daily low.
+      today_low: "{{ d[0].get('templow') }}"
+      mean_high_3d: "{{ d[:3] | map(attribute='temperature') | list | average }}"
+      min_low_3d: "{{ d[:3] | map(attribute='templow') | list | min }}"
+  # Season comes from the next three days, so one odd day does not flip it.
+  - choose:
+      - conditions: "{{ mean_high_3d | float >= 78 and min_low_3d | float >= 62 }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.hvac_season
+            data:
+              option: Summer
+      - conditions: "{{ mean_high_3d | float <= 55 }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.hvac_season
+            data:
+              option: Winter
+    default:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.hvac_season
+        data:
+          option: Shoulder
+  # Plan comes from today alone. The "big swing" check (warm afternoon, cool
+  # morning) runs first on purpose, so a swing day is Mixed rather than
+  # whichever of Cool or Heat its high or low would pick on its own.
+  - choose:
+      - conditions: "{{ today_high | float >= 76 and today_low is not none and today_low | float <= 52 }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.hvac_daily_plan
+            data:
+              option: Mixed
+      - conditions: "{{ today_high | float >= 78 }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.hvac_daily_plan
+            data:
+              option: Cool
+      - conditions: "{{ today_low is not none and today_high | float <= 60 }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.hvac_daily_plan
+            data:
+              option: Heat
+    default:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.hvac_daily_plan
+        data:
+          option: Mixed
+  - variables:
+      result: "{{ {'today_high': today_high, 'today_low': today_low} }}"
+  - stop: "done"
+    response_variable: result

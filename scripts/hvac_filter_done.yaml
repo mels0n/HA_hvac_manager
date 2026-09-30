@@ -1,0 +1,37 @@
+alias: "HVAC: filter replaced"
+description: >-
+  Resets the filter runtime counter, rewrites every outstanding reminder (ids in
+  input_text.hvac_filter_reminder_messages) to a done line with no button, and
+  clears the stored ids. With announce on, also sends a fresh confirmation, for
+  the typed /filterdone command where the reminder may be far up the chat.
+icon: mdi:air-filter
+mode: single
+fields:
+  announce:
+    name: Announce
+    description: "Send a new confirmation message to every chat."
+    default: false
+    selector:
+      boolean:
+sequence:
+  - action: counter.reset
+    target:
+      entity_id: counter.hvac_filter_runtime_quarters
+  - variables:
+      done_text: "Filter replaced on {{ now().strftime('%b %-d') }}. Runtime reset."
+  - action: script.hvac_message_update
+    data:
+      message: "{{ done_text }}"
+      button: ""
+      store: input_text.hvac_filter_reminder_messages
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.hvac_filter_reminder_messages
+    data:
+      value: ""
+  - if:
+      - "{{ announce | default(false) | bool }}"
+    then:
+      - action: script.hvac_message_send
+        data:
+          message: "{{ done_text }}"

@@ -1,0 +1,57 @@
+alias: HVAC Daily Digest
+description: >-
+  07:35 daily message: today's plan, outdoor and indoor conditions, the current
+  setpoint (and any humidity trim), and the open-window outlook. When the
+  comfortable stretch has already started, the digest carries an "Opened them"
+  button. When it starts later, the digest says so and schedules a reminder
+  15 minutes before it (input_datetime.hvac_window_open_by).
+triggers:
+  - trigger: time
+    at: "07:35:00"
+actions:
+  - action: script.hvac_window_scan
+    data:
+      scan_type: day
+    response_variable: ws
+  - action: weather.get_forecasts
+    target:
+      entity_id: weather.home
+    data:
+      type: daily
+    response_variable: fc
+  - variables:
+      today: "{{ fc['weather.home']['forecast'][0] }}"
+      trim: "{{ states('input_number.hvac_humidity_offset') | float(0) | round(0) | int }}"
+      digest_message: |-
+        HVAC today: {{ states('input_select.hvac_daily_plan') }}
+        Outside: {{ state_attr('weather.home', 'temperature') | float(0) | round(0) | int }}°F, {{ states('weather.home') }}. High {{ today.temperature | round(0) | int }}°{% if today.get('templow') is not none %} / Low {{ today.templow | round(0) | int }}°{% endif %}
+        Inside: {{ states('sensor.thermostat_temperature') | float(0) | round(0) | int }}°F, {{ states('sensor.thermostat_humidity') }}% humidity. Set to {{ state_attr('climate.thermostat', 'temperature') | float(0) | round(0) | int }}°F{% if trim > 0 %} (cooling trimmed {{ trim }}° for humidity){% endif %}
+        {% if ws.eligible -%}
+        {%- if ws.starts_now -%}Windows: open-window weather now until {{ as_timestamp(ws.window_end) | timestamp_custom('%-I:%M %p') }} (about {{ ws.usable_hours }}h)
+        {%- else -%}Windows: open-window weather {{ as_timestamp(ws.window_start) | timestamp_custom('%-I:%M %p') }} to {{ as_timestamp(ws.window_end) | timestamp_custom('%-I:%M %p') }} (about {{ ws.usable_hours }}h). A reminder will follow 15 minutes before.
+        {%- endif -%}
+        {%- else -%}Windows: no {{ ws.min_hours }}h+ stretch of open-window weather today
+        {%- endif %}
+  - if:
+      - "{{ ws.eligible and ws.starts_now }}"
+    then:
+      - action: script.hvac_message_send
+        data:
+          message: "{{ digest_message }}"
+          button: "✅ Opened them:/hvac_win_open"
+          store: input_text.hvac_window_messages
+    else:
+      # Without a button the digest is a one-off. It is not recorded, so it
+      # cannot strip a live "Closed them" button from an earlier message.
+      - action: script.hvac_message_send
+        data:
+          message: "{{ digest_message }}"
+  # Schedule (or neutralize) the pre-window reminder. Setting it to today at
+  # midnight parks a stale value in the past so it can never fire.
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.hvac_window_open_by
+    data:
+      datetime: >-
+        {{ (as_datetime(ws.window_start) - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S') if (ws.eligible and not ws.starts_now) else today_at('00:00').strftime('%Y-%m-%d %H:%M:%S') }}
+mode: single

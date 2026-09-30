@@ -1,0 +1,168 @@
+# HVAC Manager: the helpers and template sensors everything else reads.
+#
+# Enable packages in configuration.yaml first:
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Everything is in Fahrenheit. If your instance uses Celsius, convert the
+# ranges below and the thresholds in the scripts before installing.
+#
+# None of the input_* helpers below set `initial:`. An `initial:` value is
+# re-applied on every restart and would wipe your choices; without it the
+# helper restores its last value. The trade-off: on the very first load each
+# number starts at its minimum, so set your setpoints (Settings > Devices &
+# services > Helpers) before enabling the automations.
+
+input_boolean:
+  hvac_windows_open:
+    name: HVAC Windows Open
+    icon: mdi:window-open-variant
+  hvac_manual_hold:
+    name: HVAC Manual Hold
+    icon: mdi:hand-back-right
+
+input_select:
+  hvac_season:
+    name: HVAC Season
+    icon: mdi:sun-snowflake-variant
+    options: [Summer, Winter, Shoulder]
+  # Pure HVAC strategy. Window mode is NOT a plan value (see ADR-0002).
+  hvac_daily_plan:
+    name: HVAC Daily Plan
+    icon: mdi:calendar-today
+    options: [Cool, Heat, Mixed]
+
+input_number:
+  hvac_cool_day:
+    name: HVAC Cool Day
+    icon: mdi:snowflake
+    min: 65
+    max: 82
+    step: 1
+    mode: box
+    unit_of_measurement: "°F"
+  hvac_cool_night:
+    name: HVAC Cool Night
+    icon: mdi:snowflake-melt
+    min: 65
+    max: 82
+    step: 1
+    mode: box
+    unit_of_measurement: "°F"
+  hvac_heat_day:
+    name: HVAC Heat Day
+    icon: mdi:fire
+    min: 55
+    max: 75
+    step: 1
+    mode: box
+    unit_of_measurement: "°F"
+  hvac_heat_night:
+    name: HVAC Heat Night
+    icon: mdi:fire-off
+    min: 55
+    max: 75
+    step: 1
+    mode: box
+    unit_of_measurement: "°F"
+  # Written by the humidity compensation automation, readable by everything
+  # else, and safe to override by hand.
+  hvac_humidity_offset:
+    name: HVAC Humidity Offset
+    icon: mdi:water-percent
+    min: 0
+    max: 5
+    step: 1
+    mode: slider
+    unit_of_measurement: "°F"
+  hvac_window_min_hours:
+    name: HVAC Window Min Hours
+    icon: mdi:window-open-variant
+    min: 1
+    max: 12
+    step: 1
+    mode: box
+    unit_of_measurement: "h"
+
+input_datetime:
+  hvac_window_close_by:
+    name: HVAC Windows Close By
+    has_date: true
+    has_time: true
+  hvac_window_open_by:
+    name: HVAC Windows Open By
+    has_date: true
+    has_time: true
+  thermostat_last_reload_attempt:
+    name: Thermostat Last Reload Attempt
+    has_date: true
+    has_time: true
+  thermostat_stale_first_seen:
+    name: Thermostat Stale First Seen
+    has_date: true
+    has_time: true
+  hvac_last_filter_reminder:
+    name: HVAC Last Filter Reminder
+    has_date: true
+    has_time: true
+
+input_text:
+  # Comma-separated Telegram chat ids that receive messages, e.g. "111111111,222222222".
+  # Set it once in the UI. A group chat id is negative.
+  hvac_chat_ids:
+    name: HVAC Chat Ids
+    max: 255
+  # "chat:message,chat:message" of the newest window message in each chat.
+  hvac_window_messages:
+    name: HVAC Window Messages
+    max: 255
+  # Same format, for the filter reminder.
+  hvac_filter_reminder_messages:
+    name: HVAC Filter Reminder Messages
+    max: 255
+
+# Heating and cooling runtime in 15-minute units (see the filter automation).
+counter:
+  hvac_filter_runtime_quarters:
+    name: HVAC Filter Runtime Quarters
+    icon: mdi:air-filter
+    restore: true
+
+# "Awake hours" decide whether the day or the night setpoint applies.
+binary_sensor:
+  - platform: tod
+    name: HVAC Awake Hours
+    after: "07:30"
+    before: "21:30"
+
+template:
+  - binary_sensor:
+      # On when the thermostat integration has not reported a temperature for
+      # 3 hours, which is how a frozen cloud feed shows up. The sensor keeps
+      # updating in the meantime, so a plain "unavailable" check would miss it.
+      # Caveat: reloading the integration refreshes last_reported even when
+      # the feed is still dead, which is why the watchdog tracks episodes
+      # instead of trusting this sensor's on/off duration (see ADR-0004).
+      - name: "Thermostat Data Stale"
+        unique_id: hvac_thermostat_data_stale
+        device_class: problem
+        state: >-
+          {{ states.sensor.thermostat_temperature is none
+             or (now() - states.sensor.thermostat_temperature.last_reported) > timedelta(hours=3) }}
+
+  # The two display sensors read by the optional public badges (README,
+  # "Publish live values"). They expose only the plan and the humidity trim.
+  - sensor:
+      - name: "Public HVAC Plan"
+        unique_id: public_hvac_plan
+        icon: mdi:calendar-today
+        state: >-
+          {{ states('input_select.hvac_daily_plan') }}
+
+      # "None" when no trim is active, otherwise "-2°F" and so on.
+      - name: "Public HVAC Humidity Trim"
+        unique_id: public_hvac_humidity_trim
+        icon: mdi:water-percent
+        state: >-
+          {% set trim = states('input_number.hvac_humidity_offset') | float(0) | round(0) | int %}
+          {{ 'None' if trim == 0 else '-' ~ trim ~ '°F' }}

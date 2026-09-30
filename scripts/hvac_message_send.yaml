@@ -1,0 +1,73 @@
+alias: "HVAC: send message"
+description: >-
+  Sends a Telegram message to every chat id in input_text.hvac_chat_ids, with
+  an optional inline button. When a store helper is given, the ids of the sent
+  messages are recorded there ("chat:message,chat:message") after the buttons
+  are removed from the previously recorded messages, so only the newest message
+  in each chat ever carries a live button. script.hvac_message_update edits the
+  recorded messages later. Never address an edit as "the last message": that is
+  whatever was newest in the chat, often something a person typed, and a bot
+  cannot edit those (ADR-0003).
+icon: mdi:send
+mode: queued
+fields:
+  message:
+    name: Message
+    required: true
+    selector:
+      text:
+        multiline: true
+  button:
+    name: Button
+    description: "Inline button as 'Label:/callback'. Leave empty for no button."
+    required: false
+    selector:
+      text:
+  store:
+    name: Store
+    description: "input_text entity that records the sent message ids. Leave empty for a one-off message."
+    required: false
+    selector:
+      entity:
+        domain: input_text
+sequence:
+  - variables:
+      # Keep only numeric tokens (group chat ids are negative).
+      chat_ids: >-
+        {{ states('input_text.hvac_chat_ids').split(',') | map('trim') | select('match', '^-?[0-9]+$') | map('int') | list }}
+      has_store: "{{ store | default('') | length > 0 }}"
+      prev_pairs: >-
+        {{ (states(store) | replace('unknown', '') | replace('unavailable', '') | trim) if store | default('') | length > 0 else '' }}
+      kb: "{{ [button] if button | default('') | length > 0 else [] }}"
+  # Strip the buttons from the previous message so a stale tap cannot happen.
+  - if:
+      - "{{ prev_pairs | length > 0 }}"
+    then:
+      - repeat:
+          for_each: "{{ prev_pairs.split(',') }}"
+          sequence:
+            - action: telegram_bot.edit_replymarkup
+              continue_on_error: true
+              data:
+                chat_id: "{{ repeat.item.split(':')[0] | int }}"
+                message_id: "{{ repeat.item.split(':')[1] | int }}"
+                inline_keyboard: []
+  - action: telegram_bot.send_message
+    data:
+      chat_id: "{{ chat_ids }}"
+      message: "{{ message }}"
+      inline_keyboard: "{{ kb }}"
+    response_variable: sent
+  - if:
+      - "{{ has_store }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ store }}"
+        data:
+          value: >-
+            {% set ns = namespace(p=[]) %}
+            {% for c in sent.chats | default([]) %}
+              {% set ns.p = ns.p + [c.chat_id ~ ':' ~ c.message_id] %}
+            {% endfor %}
+            {{ ns.p | join(',') }}

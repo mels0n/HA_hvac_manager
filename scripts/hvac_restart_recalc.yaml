@@ -1,0 +1,29 @@
+alias: "HVAC: recalculate plan after restart"
+description: >-
+  Started (non-blocking) by the restart reconciler automation. A restart can
+  leave the season and plan stale, for example if Home Assistant was down
+  through the 05:00 run. This waits for integrations to settle, then for the
+  weather entity, recomputes both from the forecast and re-applies the plan.
+  script.hvac_apply_plan keeps its own manual-hold and stale-data guards.
+icon: mdi:restart
+mode: restart
+sequence:
+  - delay:
+      minutes: 2
+  - if:
+      - condition: state
+        entity_id: weather.home
+        state:
+          - unavailable
+          - unknown
+    then:
+      - wait_for_trigger:
+          - trigger: state
+            entity_id: weather.home
+            not_to:
+              - unavailable
+              - unknown
+        timeout: "00:05:00"
+        continue_on_timeout: false
+  - action: script.hvac_compute_plan
+  - action: script.hvac_apply_plan

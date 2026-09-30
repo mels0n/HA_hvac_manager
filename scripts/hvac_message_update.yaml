@@ -1,0 +1,45 @@
+alias: "HVAC: update recorded messages"
+description: >-
+  Edits the messages whose ids are recorded in a store helper (written by
+  script.hvac_message_send) so every chat shows the same confirmation. Edits are
+  addressed by recorded message id, never "last" (ADR-0003).
+icon: mdi:message-draw
+mode: queued
+fields:
+  message:
+    name: Message
+    required: true
+    selector:
+      text:
+        multiline: true
+  button:
+    name: Button
+    description: "Inline button as 'Label:/callback'. Leave empty to remove buttons."
+    required: false
+    selector:
+      text:
+  store:
+    name: Store
+    description: "input_text entity that holds the recorded message ids."
+    required: true
+    selector:
+      entity:
+        domain: input_text
+sequence:
+  - variables:
+      pairs: "{{ states(store) | replace('unknown', '') | replace('unavailable', '') | trim }}"
+      kb: "{{ [button] if button | default('') | length > 0 else [] }}"
+  - if:
+      - "{{ pairs | length > 0 }}"
+    then:
+      - repeat:
+          for_each: "{{ pairs.split(',') }}"
+          sequence:
+            # A message deleted or too old to edit must not stop the others.
+            - action: telegram_bot.edit_message
+              continue_on_error: true
+              data:
+                chat_id: "{{ repeat.item.split(':')[0] | int }}"
+                message_id: "{{ repeat.item.split(':')[1] | int }}"
+                message: "{{ message }}"
+                inline_keyboard: "{{ kb }}"

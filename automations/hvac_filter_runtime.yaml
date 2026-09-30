@@ -1,0 +1,56 @@
+alias: HVAC Filter Runtime
+description: >-
+  Counts heating and cooling runtime in 15-minute units and reminds you to
+  replace the filter. The first reminder goes out at 1400 units (350 hours).
+  While the counter stays at or above that, a re-reminder repeats every two
+  days at 10:05 until the filter is marked replaced. The 1400 figure is a
+  starting value; a typical filter's rating is a better guide. Note that
+  thermostat cloud APIs do not report fan-only hours, so continuous-fan
+  households understate real filter loading.
+triggers:
+  - trigger: time_pattern
+    minutes: "/15"
+    id: tick
+  - trigger: time
+    at: "10:05:00"
+    id: rerun
+actions:
+  - choose:
+      - alias: "Count a quarter hour while running"
+        conditions:
+          - condition: trigger
+            id: tick
+          - condition: state
+            entity_id: climate.thermostat
+            attribute: hvac_action
+            state:
+              - heating
+              - cooling
+        sequence:
+          - action: counter.increment
+            target:
+              entity_id: counter.hvac_filter_runtime_quarters
+          - if:
+              - condition: state
+                entity_id: counter.hvac_filter_runtime_quarters
+                state: "1400"
+            then:
+              - action: script.hvac_filter_remind
+      - alias: "Re-remind every two days until replaced"
+        conditions:
+          - condition: trigger
+            id: rerun
+          - condition: numeric_state
+            entity_id: counter.hvac_filter_runtime_quarters
+            above: 1399
+          - condition: template
+            value_template: >-
+              {{ (now() - states('input_datetime.hvac_last_filter_reminder') | as_datetime(now() - timedelta(days=365)) | as_local).total_seconds() > 165600 }}
+            note: >-
+              46 hours, not 48, so a reminder sent at 10:05 two days ago still
+              qualifies at this 10:05 check despite run-time jitter. A stamp
+              that was never set counts as long overdue.
+        sequence:
+          - action: script.hvac_filter_remind
+mode: queued
+max: 3

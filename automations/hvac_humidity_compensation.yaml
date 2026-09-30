@@ -1,0 +1,100 @@
+alias: HVAC Humidity Compensation
+description: >-
+  Cooling feels warmer in humid air, so the cooling setpoint is lowered by a
+  trim: 1F for every 8% of indoor relative humidity above 45%, capped at 5F.
+  Bands: 45-52% is 0, 53-60% is 1, 61-68% is 2, 69-76% is 3, 77-84% is 4,
+  85% and up is 5. The trim is written to input_number.hvac_humidity_offset and
+  script.hvac_apply_plan subtracts it from the cooling setpoint (not in Winter).
+  Band edges are guarded by hysteresis: going up, a threshold must hold for 20
+  minutes; going down, the thresholds sit 3 points lower and must hold for 30
+  minutes. That keeps thermostat commands rare.
+triggers:
+  # Ten numeric_state triggers exist purely to implement the hysteresis. The
+  # actions below always recompute the trim from the current humidity, so the
+  # trigger ids are threshold labels, not branch selectors. The band arithmetic
+  # assumes whole-percent readings, which is what thermostat sensors report.
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    above: 52
+    for: "00:20:00"
+    id: up1
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    above: 60
+    for: "00:20:00"
+    id: up2
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    above: 68
+    for: "00:20:00"
+    id: up3
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    above: 76
+    for: "00:20:00"
+    id: up4
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    above: 84
+    for: "00:20:00"
+    id: up5
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    below: 50
+    for: "00:30:00"
+    id: dn1
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    below: 58
+    for: "00:30:00"
+    id: dn2
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    below: 66
+    for: "00:30:00"
+    id: dn3
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    below: 74
+    for: "00:30:00"
+    id: dn4
+  - trigger: numeric_state
+    entity_id: sensor.thermostat_humidity
+    below: 82
+    for: "00:30:00"
+    id: dn5
+  # A `for:` clock resets on every restart, so a backstop resync runs at
+  # startup and at 04:50, ten minutes before the 05:00 plan is computed.
+  - trigger: homeassistant
+    event: start
+    id: resync_start
+  - trigger: time
+    at: "04:50:00"
+    id: resync_daily
+conditions:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: sensor.thermostat_humidity
+        state:
+          - unavailable
+          - unknown
+  - condition: state
+    entity_id: binary_sensor.thermostat_data_stale
+    state: "off"
+actions:
+  - variables:
+      rh: "{{ states('sensor.thermostat_humidity') | float(0) }}"
+      # (rh - 45) / 8, whole degrees, clamped to 0..5.
+      target: "{{ [5, [0, ((rh - 45) / 8) | int] | max] | min }}"
+  - if:
+      - "{{ (states('input_number.hvac_humidity_offset') | int(0)) != (target | int) }}"
+    then:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.hvac_humidity_offset
+        data:
+          value: "{{ target }}"
+      - action: script.hvac_apply_plan
+mode: single
+max_exceeded: silent

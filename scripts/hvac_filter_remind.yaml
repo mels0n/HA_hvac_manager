@@ -1,0 +1,21 @@
+alias: "HVAC: filter reminder"
+description: >-
+  Sends the replace-the-filter reminder with a Replaced button, records the
+  message ids in input_text.hvac_filter_reminder_messages (so the previous
+  reminder loses its button and script.hvac_filter_done can close every
+  outstanding reminder), and stamps input_datetime.hvac_last_filter_reminder
+  for the re-remind throttle.
+icon: mdi:air-filter
+mode: single
+sequence:
+  - action: script.hvac_message_send
+    data:
+      message: >-
+        {{ (states('counter.hvac_filter_runtime_quarters') | int(0) / 4) | round(0) | int }} hours of HVAC runtime since the last filter change. Replace the filter, then tap Replaced (or send /filterdone).
+      button: "✅ Replaced:/hvac_filter_done"
+      store: input_text.hvac_filter_reminder_messages
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.hvac_last_filter_reminder
+    data:
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"

@@ -1,0 +1,23 @@
+alias: HVAC Setpoints
+description: >-
+  Moves between the day and night setpoints at 07:30 and 21:30 by clearing the
+  manual hold and re-applying the plan. The day/night choice itself comes from
+  binary_sensor.hvac_awake_hours inside script.hvac_apply_plan.
+triggers:
+  - trigger: time
+    at: "07:30:00"
+    id: day
+  - trigger: time
+    at: "21:30:00"
+    id: night
+actions:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.hvac_manual_hold
+  # binary_sensor.hvac_awake_hours flips at the same instant as these triggers.
+  # A short pause guarantees it has updated before the plan is applied.
+  - delay:
+      seconds: 5
+  - action: script.hvac_apply_plan
+mode: queued
+max: 3

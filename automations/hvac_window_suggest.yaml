@@ -1,0 +1,97 @@
+alias: HVAC Window Suggestions
+description: >-
+  Suggests opening the windows when the weather allows. At 11:00 and 15:00 it
+  scans the forecast: if a comfortable stretch has started, it sends a prompt
+  with an "Opened them" button; if one starts later, it schedules a reminder
+  15 minutes before it. At 20:30 it checks whether the night will stay
+  comfortable until 07:30. When the scheduled time arrives it re-scans (the
+  forecast may have changed) and prompts only if the window still exists.
+triggers:
+  - trigger: time
+    at:
+      - "11:00:00"
+      - "15:00:00"
+    id: scan_day
+  - trigger: time
+    at: "20:30:00"
+    id: scan_night
+  - trigger: time
+    at: input_datetime.hvac_window_open_by
+    id: open_time
+conditions:
+  - condition: state
+    entity_id: input_boolean.hvac_windows_open
+    state: "off"
+  - condition: state
+    entity_id: input_boolean.hvac_manual_hold
+    state: "off"
+  - condition: state
+    entity_id: binary_sensor.thermostat_data_stale
+    state: "off"
+    note: Do not act on stale indoor readings. The scan compares outdoor air to indoor air.
+  # Add your own conditions here, for example a presence check, if you only
+  # want suggestions while someone can act on them.
+actions:
+  - choose:
+      - alias: "Daytime scan"
+        conditions:
+          - condition: trigger
+            id: scan_day
+        sequence:
+          - action: script.hvac_window_scan
+            data:
+              scan_type: day
+            response_variable: ws
+          - choose:
+              - conditions:
+                  - "{{ ws.eligible and ws.starts_now }}"
+                sequence:
+                  - action: script.hvac_message_send
+                    data:
+                      message: "Open-window weather now until {{ as_timestamp(ws.window_end) | timestamp_custom('%-I:%M %p') }} (about {{ ws.usable_hours }}h). Open up?"
+                      button: "✅ Opened them:/hvac_win_open"
+                      store: input_text.hvac_window_messages
+              - conditions:
+                  - "{{ ws.eligible and not ws.starts_now }}"
+                sequence:
+                  - action: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.hvac_window_open_by
+                    data:
+                      datetime: "{{ (as_datetime(ws.window_start) - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S') }}"
+      - alias: "Overnight scan"
+        conditions:
+          - condition: trigger
+            id: scan_night
+        sequence:
+          - action: script.hvac_window_scan
+            data:
+              scan_type: overnight
+            response_variable: ws
+          - if:
+              - "{{ ws.eligible }}"
+            then:
+              - action: script.hvac_message_send
+                data:
+                  message: "Good all-night window weather. It stays comfortable until 7:30 AM. Open for the night?"
+                  button: "✅ Opened them:/hvac_win_open"
+                  store: input_text.hvac_window_messages
+      - alias: "Pre-window reminder"
+        conditions:
+          - condition: trigger
+            id: open_time
+        sequence:
+          - action: script.hvac_window_scan
+            data:
+              scan_type: day
+            response_variable: ws
+          - if:
+              - "{{ ws.eligible }}"
+            then:
+              - action: script.hvac_message_send
+                data:
+                  message: "Open-window weather starts about {{ as_timestamp(ws.window_start) | timestamp_custom('%-I:%M %p') }}, good until {{ as_timestamp(ws.window_end) | timestamp_custom('%-I:%M %p') }} (about {{ ws.usable_hours }}h). Open up?"
+                  button: "✅ Opened them:/hvac_win_open"
+                  store: input_text.hvac_window_messages
+mode: queued
+max: 4
